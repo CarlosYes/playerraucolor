@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <title>Radio Amigos Unidos - Race Mode V13</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root { --bg: #1a1a1b; }
+        @keyframes chromaphase {
+            0%, 100% { color: #00f2ff; border-color: #00f2ff; fill: #00f2ff; }
+            33% { color: #00ff80; border-color: #00ff80; fill: #00ff80; }
+            66% { color: #ff4136; border-color: #ff4136; fill: #ff4136; }
+        }
+        body { background: #2c2f33; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; }
+        .player-card { background: var(--bg); width: 420px; border-radius: 15px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.8); color: white; border: 1px solid #333; }
+        .top-bar { background: #000; padding: 12px 0; border-bottom: 1px solid #222; overflow: hidden; position: relative; width: 100%; height: 26px; }
+        
+        #songName { 
+            position: absolute; white-space: nowrap; font-size: 1.15rem; font-weight: 700; 
+            text-transform: uppercase; animation: chromaphase 8s infinite, scroll-with-pause 12s linear infinite; 
+            display: inline-block; left: 100%; 
+        }
+        @keyframes scroll-with-pause { 0% { left: 100%; transform: translateX(0); } 66% { left: 0%; transform: translateX(-100%); } 100% { left: 0%; transform: translateX(-100%); } }
+
+        .header { display: flex; padding: 15px 20px; background: #222; align-items: center; gap: 20px; }
+        .btn-play { width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.05); border: 2.5px solid; cursor: pointer; display: flex; justify-content: center; align-items: center; animation: chromaphase 8s infinite; outline: none; }
+        .btn-play svg { fill: currentColor; width: 28px; height: 28px; }
+        .cover-container { width: 80px; height: 80px; border-radius: 10px; overflow: hidden; border: 2px solid; animation: chromaphase 8s infinite; }
+        .cover-container img { width: 100%; height: 100%; object-fit: cover; }
+        
+        canvas { width: 100%; height: 60px; display: block; background: #000; border-top: 1px solid #222; }
+        .volume-row { display: flex; align-items: center; padding: 10px 20px; gap: 12px; background: #111; }
+        input[type=range] { -webkit-appearance: none; flex: 1; height: 3px; background: #333; accent-color: #fff; cursor: pointer; }
+        
+        .footer { display: flex; background: #0a0a0a; padding: 12px; border-top: 1px solid #222; }
+        .stat { flex: 1; text-align: center; font-weight: bold; animation: chromaphase 8s infinite; text-transform: uppercase; }
+    </style>
+</head>
+<body onclick="forceStart()" onmousemove="forceStart()">
+
+<div class="player-card">
+    <div class="top-bar"><span id="songName">A CONECTAR...</span></div>
+    <div class="header">
+        <button class="btn-play" id="playBtn">
+            <svg viewBox="0 0 24 24"><path id="svgPath" d="M8 5v14l11-7z"></path></svg>
+        </button>
+        <div style="flex:1">
+            <p style="margin:0; font-size: 10px; font-weight: bold; letter-spacing: 1.5px; opacity: 0.8;">Rádio</p>
+            <p style="margin:0; font-size: 9px; color: #ff4136; font-weight: bold;">Dos Amigos Unidos</p>
+        </div>
+        <div class="cover-container"><img src="https://xatimg.com/image/q5gRdUVazDFw.png"></div>
+    </div>
+    <canvas id="visualizer"></canvas>
+    <div class="volume-row"><span>🔈</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.8"><span>🔊</span></div>
+    <div class="footer">
+        <div class="stat"><span id="listeners"> </span> OUVINTES</div>
+    </div>
+</div>
+
+<audio id="radio" crossorigin="anonymous" autoplay></audio>
+
+<script>
+    const radio = document.getElementById('radio');
+    const songEl = document.getElementById('songName');
+    const svgPath = document.getElementById('svgPath');
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
+    let audioCtx, analyser, source, initialized = false, autoplayDone = false;
+
+    // NOVO MOTOR DE METADADOS: LÊ XML DIRETO COM BYPASS
+    async function updateMetadata() {
+        const ms = Date.now();
+        // Usamos o ficheiro /stats que é mais fiável que o 7.html
+        const target = `https://sp0.redeaudio.com:10822/stats?sid=1&t=${ms}`;
+        
+        try {
+            const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(target)}`);
+            const json = await res.json();
+            const contents = json.contents;
+
+            // Parser manual para evitar erros de XML mal formado
+            const songMatch = contents.match(/<SONGTITLE>([^<]+)<\/SONGTITLE>/);
+            const listenerMatch = contents.match(/<CURRENTLISTENERS>(\d+)<\/CURRENTLISTENERS>/);
+
+            if (songMatch && songMatch[1]) {
+                const song = songMatch[1].toUpperCase().trim();
+                if (songEl.innerText !== song) songEl.innerText = song;
+            }
+            
+            if (listenerMatch && listenerMatch[1]) {
+                document.getElementById('listeners').innerText = listenerMatch[1];
+            }
+        } catch (e) {
+            // Backup agressivo via Codetabs se o AllOrigins falhar
+            fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(target)}`)
+                .then(r => r.text())
+                .then(text => {
+                    const s = text.match(/<SONGTITLE>([^<]+)<\/SONGTITLE>/);
+                    const l = text.match(/<CURRENTLISTENERS>(\d+)<\/CURRENTLISTENERS>/);
+                    if (s) songEl.innerText = s[1].toUpperCase().trim();
+                    if (l) document.getElementById('listeners').innerText = l[1];
+                });
+        }
+    }
+
+    function initVis() {
+        if (initialized) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        source = audioCtx.createMediaElementSource(radio);
+        source.connect(analyser); 
+        analyser.connect(audioCtx.destination);
+        analyser.fftSize = 128;
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        function draw() {
+            requestAnimationFrame(draw);
+            analyser.getByteFrequencyData(dataArray);
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            let x = 0;
+            let barWidth = (canvas.width / dataArray.length) * 2;
+            for(let i = 0; i < dataArray.length; i++) {
+                let h = dataArray[i] / 2.5;
+                ctx.fillStyle = `hsl(${(i * 10 + Date.now()/15)%360}, 100%, 50%)`;
+                ctx.fillRect(x, canvas.height - h, barWidth, h);
+                x += barWidth + 1;
+            }
+        }
+        draw(); initialized = true;
+    }
+
+    function forceStart() {
+        if (autoplayDone) return;
+        if (!radio.src) {
+            radio.src = "https://sp0.redeaudio.com:10822/;stream.mp3";
+            radio.volume = document.getElementById('vol').value;
+        }
+        radio.play().then(() => {
+            svgPath.setAttribute("d", "M6 19h4V5H6v14zm8-14v14h4V5h-4z");
+            initVis();
+            updateMetadata();
+            setInterval(updateMetadata, 10000); // 10s para não ser banido pelo servidor
+            autoplayDone = true;
+        }).catch(() => {});
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    document.getElementById('playBtn').onclick = (e) => {
+        e.stopPropagation();
+        if (radio.paused) { 
+            radio.play(); 
+            svgPath.setAttribute("d", "M6 19h4V5H6v14zm8-14v14h4V5h-4z");
+        } else { 
+            radio.pause(); 
+            svgPath.setAttribute("d", "M8 5v14l11-7z"); 
+        }
+    };
+
+    document.getElementById('vol').oninput = (e) => { radio.volume = e.target.value; };
+</script>
+</body>
+</html>
